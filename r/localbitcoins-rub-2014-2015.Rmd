@@ -1,0 +1,85 @@
+---
+title: "Анализ рублевых сделок биржи Localbitcoins за 2014-ый и 2015-ые годы"
+author: "yuri@coinside.ru"
+date: "22 December 2015"
+output: html_document
+---
+
+## По годам
+
+```{r, echo=FALSE}
+library(rjson)
+library(zoo)
+library(reshape2)
+library(ggplot2)
+library(scales)
+
+last_year = 2015
+prev_year = last_year - 1
+last_date = as.Date(paste0(last_year, "-12-31"))
+
+json_data <- fromJSON(file="http://bitcoincharts.com/charts/chart.json?m=localbtcRUB&SubmitButton=Draw&r=&i=&c=0&s=&e=&Prev=&Next=&t=&b=&a1=&m1=10&a2=&m2=25&x=0&i1=&i2=&i3=&i4=&v=1&cv=1&ps=0&l=0&p=0&")
+
+df <- as.data.frame(t(as.data.frame(json_data)))
+colnames(df) <- c("Timestamp", "Open", "High", "Low", "Close", "Volume.BTC", "Volume.Currency", "Weighted.Price")
+rownames(df) <- seq(length=nrow(df))
+df[df==1.7e+308] <- NA
+
+df$t <- as.Date(as.POSIXct(df$Timestamp, origin="1970-01-01"))
+
+# just in case there are missing days + till the end of the year
+df <- merge(df, data.frame(t=seq(min(df$t), last_date, "days")), by="t", all=TRUE)
+
+usdrub <- read.csv("https://www.quandl.com/api/v3/datasets/CURRFX/USDRUB.csv")
+usdrub$t <- as.Date(usdrub$Date)
+
+# there're missing days (holidays?)
+usdrub <- merge(usdrub, data.frame(t=seq(min(usdrub$t), last_date, "days")), by="t", all=TRUE)
+usdrub$Rate <- na.locf(usdrub$Rate)
+
+df <- merge(df, usdrub, by="t", all=TRUE)
+df$Date <- NULL
+
+df <- transform(df, Volume.USD = Volume.Currency / Rate)
+
+# cut off two last years
+df <- subset(df, format(t, "%Y") >= prev_year)
+
+dfprev <- subset(df, format(t, "%Y") == prev_year, select="Volume.USD")
+dflast <- subset(df, format(t, "%Y") == last_year, select="Volume.USD")
+
+dfy <- data.frame(dfprev, dflast)
+
+names(dfy) <- c(prev_year, last_year)
+dfy$day <- seq(1:365)
+rownames(dfy) <- seq(1:365) 
+
+# today's volume can be incomplete
+dfy[format(Sys.Date(), "%j"), toString(last_year)] <- NA
+
+dfm <- melt(dfy, id="day")
+
+ggplot() +
+  geom_line(data=dfm, aes(day, value, col=variable), size=1) +
+  scale_y_continuous("BTC/RUB volume in $", labels = dollar) +
+  xlab("Day of the year") +
+  labs(colour = "Year") 
+
+```
+
+## По дням недели
+
+```{r, echo=FALSE}
+dfw <- data.frame(weekdays(df$t), df$Volume.USD)
+colnames(dfw) <- c("day", "volume")
+dfw <- dfw[complete.cases(dfw),]
+dfw$day <- factor(dfw$day, levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+barplot(tapply(dfw$volume, dfw$day, FUN=sum))
+```
+
+## 30-ти дневное среднее
+
+```{r, echo=FALSE}
+x <- zoo(df$Volume.USD, df$t)
+plot(rollapply(x, 30, mean, fill=NA))
+```
